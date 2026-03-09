@@ -79,25 +79,94 @@ agent-browser --cdp 9222 snapshot -i
 | 多 tab 支援 | 可透過 `open` 切換 | 需 `targetId` 管理 |
 | 穩定性 | 直連較穩定 | 依賴 Extension 連線 |
 
+### ⚠️ Threads 登入確認（重要！）
+
+透過 CDP 打開 Threads 時，有時會出現「以 xxx 帳號繼續登入」的按鈕畫面，
+而不是直接進入已登入狀態。**必須點擊該按鈕才會真正完成登入。**
+
+出現的情境：
+- 新開 tab 導航到 Threads
+- CDP 連線後第一次訪問 Threads
+- Cookies 存在但 session 尚未激活
+
+```bash
+# 打開 Threads 後先 snapshot 檢查
+agent-browser snapshot -i
+
+# 如果看到以下任一按鈕，必須點擊：
+# - "Instagram 使用 Instagram 帳號繼續 登入"
+# - "以 baba7778899 身份繼續"
+# - "Continue as baba7778899"
+# - "Log in" / "登入"
+
+# 範例：檢查是否需要登入確認
+agent-browser snapshot -i 2>&1 | grep -iE "Instagram.*登入|Continue as|繼續|Log in"
+# 如果有結果 → 點擊該按鈕
+agent-browser click @e9   # ref 會不同，以 snapshot 為準
+agent-browser wait 3000
+agent-browser snapshot -i  # 確認已登入（應該看到「建立」「通知」等按鈕）
+```
+
+**判斷是否已登入的方式：**
+- ✅ 已登入：看到「建立」按鈕、「編輯個人檔案」、feed 內容
+- ❌ 未登入：看到「Instagram 使用 Instagram 帳號繼續 登入」或「Log in」
+
+### 完整登入確認流程（建議每次連線後執行）
+
+```bash
+#!/bin/bash
+# threads-login-check.sh - 確保 Threads 已登入
+
+# 1. 連接 CDP
+WS_URL=$(curl -s http://127.0.0.1:9222/json/version | python3 -c "import json,sys; print(json.load(sys.stdin)['webSocketDebuggerUrl'])")
+agent-browser --cdp "$WS_URL" open https://www.threads.com/
+agent-browser wait 3000
+
+# 2. 檢查登入狀態
+LOGIN_CHECK=$(agent-browser snapshot -i 2>&1 | grep -iE "Instagram.*登入|Continue as|繼續.*登入|Log in")
+
+if [ -n "$LOGIN_CHECK" ]; then
+  echo "⚠️ 需要登入確認，正在點擊..."
+  # 找到登入按鈕的 ref 並點擊
+  LOGIN_REF=$(agent-browser snapshot -i 2>&1 | grep -iE "Instagram.*登入|Continue as|繼續" | grep -oP '@e\d+' | head -1)
+  if [ -n "$LOGIN_REF" ]; then
+    agent-browser click "$LOGIN_REF"
+    agent-browser wait 3000
+    echo "✅ 已點擊登入確認"
+  fi
+else
+  echo "✅ 已登入"
+fi
+
+# 3. 驗證
+agent-browser snapshot -i 2>&1 | grep -q "建立\|Create" && echo "✅ 登入成功" || echo "❌ 登入失敗"
+```
+
 ### 實戰範例：在 Threads 發文
 
 ```bash
 # 1. 連接到 Chrome-AI
 WS_URL=$(curl -s http://127.0.0.1:9222/json/version | python3 -c "import json,sys; print(json.load(sys.stdin)['webSocketDebuggerUrl'])")
 agent-browser --cdp "$WS_URL" open https://www.threads.com/@baba7778899
+agent-browser wait 3000
 
-# 2. 查看頁面元素
+# 2. 檢查登入狀態（重要！）
+# 如果看到「以 xxx 帳號繼續登入」→ 點擊它
+agent-browser snapshot -i 2>&1 | grep -iE "Instagram.*登入|Continue as|繼續"
+# 如有結果：agent-browser click @eXX  (用 snapshot 中的實際 ref)
+
+# 3. 查看頁面元素
 agent-browser snapshot -i
 
-# 3. 點擊「建立」按鈕
+# 4. 點擊「建立」按鈕
 agent-browser click @e4
 agent-browser wait 2000
 
-# 4. 填入文案
+# 5. 填入文案
 agent-browser snapshot -i  # 取得新 ref
 agent-browser fill @e13 '你的貼文內容...'
 
-# 5. 發佈
+# 6. 發佈
 agent-browser click @e21  # 點「發佈」按鈕
 agent-browser wait 3000
 ```
